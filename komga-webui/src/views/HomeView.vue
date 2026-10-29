@@ -26,7 +26,7 @@
 
         <v-list-item-content>
           <v-list-item-title class="title">
-            Komga
+            Drew's Comics
           </v-list-item-title>
         </v-list-item-content>
 

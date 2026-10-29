@@ -30,6 +30,7 @@ powershell -ExecutionPolicy Bypass -File scripts\windows\build-and-deploy.ps1
 ## Notes
 
 - The scheduled task command line must not contain quotes or spaces in paths; `install-service.ps1` refuses paths with whitespace.
-- `next-ui` needed a small Vite plugin in `vite.config.mts` to build on Windows: `vite-plugin-dir2json` emits import paths with backslashes, and `\src\i18n\uk.json` is read as an invalid `\u` escape.
+- `next-ui` needed a small Vite plugin in `vite.config.mts` to build on Windows: `vite-plugin-dir2json` emits import paths with backslashes (`\src\i18n\uk.json` is read as an invalid `\u` escape), and it nests the locale map under the full `C:\...` path instead of the locale codes, which left the new UI blank with `Invalid language tag: C:`.
+- The next-ui build rewrites its generated `src/*.d.ts` and `.eslintrc-auto-import.json` with CRLF line endings; `git checkout -- next-ui/src/*.d.ts next-ui/.eslintrc-auto-import.json` restores them before committing.
 - The `komga-webui` build runs its TypeScript type-checker in a worker that can run out of memory; the bundle is still emitted. `build-and-deploy.ps1` sets `NODE_OPTIONS=--max-old-space-size=4096`.
 - To stop or start the server by hand: `Stop-ScheduledTask -TaskName Komga` / `Start-ScheduledTask -TaskName Komga`. Logs are in `%LOCALAPPDATA%\Komga\logs\komga.log`.

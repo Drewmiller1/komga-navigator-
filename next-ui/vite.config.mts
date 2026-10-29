@@ -84,10 +84,23 @@ export default defineConfig(({ mode }) => ({
     dir2json({
       dts: true,
     }),
-    // vite-plugin-dir2json emits import paths with OS-native separators, which on Windows
-    // produces "\src\i18n\uk.json" and fails to parse (\u is an escape sequence).
+    // vite-plugin-dir2json does not build correctly on Windows:
+    // - the "@/i18n" alias resolves to a mixed-separator path ("C:\...\src/i18n"), which the plugin
+    //   then fails to strip from the file paths, so the locale map ends up nested under
+    //   {"C:": {Users: ...}} instead of {en: ..., fr: ...}. Resolving the directory with native
+    //   separators fixes that.
+    // - it emits import paths with OS-native separators, which produces "\src\i18n\uk.json"
+    //   and fails to parse (\u is an escape sequence).
     {
-      name: 'dir2json-posix-paths',
+      name: 'dir2json-windows-paths',
+      enforce: 'pre',
+      async resolveId(source, importer, options) {
+        if (!source.includes('?dir2json')) return null
+        const resolved = await this.resolve(source, importer, { ...options, skipSelf: true })
+        if (!resolved) return null
+        const [dir, query] = resolved.id.split('?')
+        return `${path.normalize(dir)}?${query}`
+      },
       transform(code, id) {
         if (!id.includes('?dir2json')) return null
         return {

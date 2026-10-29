@@ -7,16 +7,20 @@
        @touchend="onTouchEnd"
        @touchcancel="onTouchEnd"
   >
-    <transition :name="animations ? 'pan-fade' : ''">
-      <img v-if="currentPage"
+    <!--  the page is wrapped so that the slide between pages and the pan/zoom of the image don't fight over the same transform  -->
+    <transition :name="animations ? transitionName : ''">
+      <div v-if="currentPage"
            :key="`pan-${currentPage.number}`"
-           :alt="`Page ${currentPage.number}`"
-           :src="currentPage.url"
-           :style="imageStyle"
-           class="pan-image"
-           draggable="false"
-           @load="onLoad($event, currentPage)"
-      />
+           class="pan-page"
+      >
+        <img :alt="`Page ${currentPage.number}`"
+             :src="currentPage.url"
+             :style="imageStyle"
+             class="pan-image"
+             draggable="false"
+             @load="onLoad($event, currentPage)"
+        />
+      </div>
     </transition>
 
     <!--  preload neighbours, and capture their dimensions  -->
@@ -30,7 +34,7 @@
 
     <!--  minimap: where the viewport is on the page  -->
     <transition name="pan-fade">
-      <div v-if="showMinimap && stops.length > 1 && !introActive"
+      <div v-if="showMinimap && stops.length > 1 && !introActive && !leaving"
            class="pan-minimap"
            :style="minimapStyle"
       >
@@ -58,6 +62,10 @@ const MINIMAP_DURATION = 1500
 // when a page opens: show the whole page, then glide to the first area
 const INTRO_HOLD = 1500
 const INTRO_GLIDE = 2500
+// when leaving a page forward: glide back out to the whole page (same timing as the intro glide),
+// show it briefly, then the next page slides in
+const OUTRO_GLIDE = INTRO_GLIDE
+const OUTRO_HOLD = 500
 // stopIndex value meaning "the last stop of the page", resolved once the page dimensions are known
 const LAST_STOP = -1
 
@@ -66,6 +74,8 @@ enum IntroPhase {
   OVERVIEW,
   GLIDE,
 }
+
+type Slide = 'forward' | 'back'
 
 interface Size {
   w: number,
@@ -92,6 +102,12 @@ export default Vue.extend({
       minimapTimer: undefined as number | undefined,
       introPhase: IntroPhase.OVERVIEW,
       introTimer: undefined as number | undefined,
+      // gliding out to the whole page before moving to the next one
+      leaving: false,
+      outroTimer: undefined as number | undefined,
+      // which way the upcoming page change goes, so the watcher can pick the slide direction
+      slide: undefined as Slide | undefined,
+      transitionName: 'pan-fade',
     }
   },
   props: {
@@ -122,6 +138,12 @@ export default Vue.extend({
       this.stopIndex = this.landAtEnd ? LAST_STOP : 0
       this.free = undefined
       this.finishIntro()
+      this.cancelOutro()
+      // pages we moved to ourselves slide in (from the side the next page comes from), external changes fade
+      const fromForwardSide = this.rtl ? 'pan-slide-from-left' : 'pan-slide-from-right'
+      const fromBackSide = this.rtl ? 'pan-slide-from-right' : 'pan-slide-from-left'
+      this.transitionName = this.slide === 'forward' ? fromForwardSide : this.slide === 'back' ? fromBackSide : 'pan-fade'
+      this.slide = undefined
       // going back lands on the last area directly, no intro
       if (!this.landAtEnd) this.introPhase = IntroPhase.OVERVIEW
       this.landAtEnd = false
@@ -154,6 +176,7 @@ export default Vue.extend({
     window.clearTimeout(this.wheelTimer)
     window.clearTimeout(this.minimapTimer)
     window.clearTimeout(this.introTimer)
+    window.clearTimeout(this.outroTimer)
   },
   computed: {
     shortcuts(): any {
@@ -195,11 +218,13 @@ export default Vue.extend({
       let y = -this.offset.y
       let scale = 1
       let transition = this.free || !this.animations ? 'none' : undefined
-      if (this.introActive && this.introPhase === IntroPhase.OVERVIEW) {
+      const overview = this.leaving || (this.introActive && this.introPhase === IntroPhase.OVERVIEW)
+      if (overview) {
         scale = 1 / this.localZoom
         x = (this.viewport.w - this.size.w * scale) / 2
         y = (this.viewport.h - this.size.h * scale) / 2
-        transition = 'none'
+        // the intro starts on the whole page without animation, the outro glides out to it
+        transition = this.leaving && this.animations ? `transform ${OUTRO_GLIDE}ms cubic-bezier(0.65, 0, 0.35, 1)` : 'none'
       } else if (this.introActive && this.introPhase === IntroPhase.GLIDE) {
         transition = this.animations ? `transform ${INTRO_GLIDE}ms cubic-bezier(0.65, 0, 0.35, 1)` : 'none'
       }
@@ -255,6 +280,26 @@ export default Vue.extend({
       this.introTimer = undefined
       this.introPhase = IntroPhase.NONE
     },
+    // glide out to the whole page, then move on to the next page
+    startOutro() {
+      if (this.leaving) return
+      this.leaving = true
+      this.showMinimap = false
+      this.outroTimer = window.setTimeout(this.goToNextPage, OUTRO_GLIDE + OUTRO_HOLD)
+    },
+    // stay on this page: glide back to the current area
+    cancelOutro() {
+      window.clearTimeout(this.outroTimer)
+      this.outroTimer = undefined
+      this.leaving = false
+    },
+    goToNextPage() {
+      window.clearTimeout(this.outroTimer)
+      this.outroTimer = undefined
+      this.landAtEnd = false
+      this.slide = 'forward'
+      this.$emit('update:page', this.page + 1)
+    },
     keyPressed(e: KeyboardEvent) {
       if (e.ctrlKey || e.altKey || e.metaKey) return
       const shortcut = this.shortcuts[e.key]
@@ -280,25 +325,30 @@ export default Vue.extend({
     },
     next() {
       if (this.introActive) return this.finishIntro()
+      // already on the way out: skip the rest of the animation
+      if (this.leaving) return this.goToNextPage()
       this.settle()
       if (this.resolvedStopIndex < this.stops.length - 1) {
         this.stopIndex = this.resolvedStopIndex + 1
         this.flashMinimap()
       } else if (this.page < this.pages.length) {
-        this.landAtEnd = false
-        this.$emit('update:page', this.page + 1)
+        if (this.animations) this.startOutro()
+        else this.goToNextPage()
       } else {
         this.$emit('jump-next')
       }
     },
     prev() {
       if (this.introActive) return this.finishIntro()
+      // changed your mind while leaving: stay on this page
+      if (this.leaving) return this.cancelOutro()
       this.settle()
       if (this.resolvedStopIndex > 0) {
         this.stopIndex = this.resolvedStopIndex - 1
         this.flashMinimap()
       } else if (this.page > 1) {
         this.landAtEnd = true
+        this.slide = 'back'
         this.$emit('update:page', this.page - 1)
       } else {
         this.$emit('jump-previous')
@@ -315,6 +365,7 @@ export default Vue.extend({
     // change zoom, keeping the image point under (ax, ay) in place, then snap to the nearest stop
     applyZoom(zoom: number, ax: number = this.viewport.w / 2, ay: number = this.viewport.h / 2, snap: boolean = true) {
       this.finishIntro()
+      this.cancelOutro()
       zoom = Math.round(clampZoom(zoom) * 100) / 100
       const before = this.size
       const offset = this.offset
@@ -348,6 +399,7 @@ export default Vue.extend({
     onTouchStart(e: TouchEvent) {
       if (e.touches.length !== 2) return
       this.finishIntro()
+      this.cancelOutro()
       const [a, b] = [e.touches[0], e.touches[1]]
       this.pinch = {
         distance: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY),
@@ -397,6 +449,14 @@ export default Vue.extend({
   user-select: none;
 }
 
+.pan-page {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
 .pan-image {
   position: absolute;
   top: 0;
@@ -404,6 +464,20 @@ export default Vue.extend({
   max-width: none;
   transform-origin: 0 0;
   transition: transform 450ms cubic-bezier(0.45, 0, 0.2, 1);
+}
+
+/* page change we triggered: the old page is pushed out while the new one slides in */
+.pan-slide-from-right-enter-active, .pan-slide-from-right-leave-active,
+.pan-slide-from-left-enter-active, .pan-slide-from-left-leave-active {
+  transition: transform 600ms cubic-bezier(0.45, 0, 0.2, 1);
+}
+
+.pan-slide-from-right-enter, .pan-slide-from-left-leave-to {
+  transform: translate3d(100%, 0, 0);
+}
+
+.pan-slide-from-left-enter, .pan-slide-from-right-leave-to {
+  transform: translate3d(-100%, 0, 0);
 }
 
 .pan-preload {
