@@ -84,6 +84,18 @@ export default defineConfig(({ mode }) => ({
     dir2json({
       dts: true,
     }),
+    // vite-plugin-dir2json emits import paths with OS-native separators, which on Windows
+    // produces "\src\i18n\uk.json" and fails to parse (\u is an escape sequence).
+    {
+      name: 'dir2json-posix-paths',
+      transform(code, id) {
+        if (!id.includes('?dir2json')) return null
+        return {
+          code: code.replace(/import\("([^"]+)"\)/g, (_m, p: string) => `import("${p.replace(/\\/g, '/')}")`),
+          map: null,
+        }
+      },
+    },
     UnoCSS(),
     DevTools(),
     PiniaColadaDevtools(),
