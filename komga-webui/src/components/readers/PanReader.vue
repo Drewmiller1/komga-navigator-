@@ -62,8 +62,8 @@ const MINIMAP_DURATION = 1500
 // when a page opens: show the whole page, then glide to the first area
 const INTRO_HOLD = 1500
 const INTRO_GLIDE = 2500
-// when leaving a page forward: glide back out to the whole page (same timing as the intro glide),
-// show it briefly, then the next page slides in
+// when leaving a page: glide back out to the whole page (same timing as the intro glide),
+// show it briefly, then the next page slides in over it
 const OUTRO_GLIDE = INTRO_GLIDE
 const OUTRO_HOLD = 500
 // stopIndex value meaning "the last stop of the page", resolved once the page dimensions are known
@@ -102,8 +102,8 @@ export default Vue.extend({
       minimapTimer: undefined as number | undefined,
       introPhase: IntroPhase.OVERVIEW,
       introTimer: undefined as number | undefined,
-      // gliding out to the whole page before moving to the next one
-      leaving: false,
+      // gliding out to the whole page before moving to another page, and which way
+      leaving: undefined as Slide | undefined,
       outroTimer: undefined as number | undefined,
       // which way the upcoming page change goes, so the watcher can pick the slide direction
       slide: undefined as Slide | undefined,
@@ -144,9 +144,9 @@ export default Vue.extend({
       const fromBackSide = this.rtl ? 'pan-slide-from-right' : 'pan-slide-from-left'
       this.transitionName = this.slide === 'forward' ? fromForwardSide : this.slide === 'back' ? fromBackSide : 'pan-fade'
       this.slide = undefined
-      // going back lands on the last area directly, no intro
-      if (!this.landAtEnd) this.introPhase = IntroPhase.OVERVIEW
       this.landAtEnd = false
+      // every page opens on the whole page, then glides to its first area (or its last one when going back)
+      this.introPhase = IntroPhase.OVERVIEW
     },
     zoom(val) {
       // zoom changed from outside (settings)
@@ -280,25 +280,26 @@ export default Vue.extend({
       this.introTimer = undefined
       this.introPhase = IntroPhase.NONE
     },
-    // glide out to the whole page, then move on to the next page
-    startOutro() {
-      if (this.leaving) return
-      this.leaving = true
+    // glide out to the whole page, then move on to the next (or previous) page
+    startOutro(direction: Slide) {
+      if (this.leaving === direction) return
+      this.cancelOutro()
+      this.leaving = direction
       this.showMinimap = false
-      this.outroTimer = window.setTimeout(this.goToNextPage, OUTRO_GLIDE + OUTRO_HOLD)
+      this.outroTimer = window.setTimeout(() => this.goToPage(direction), OUTRO_GLIDE + OUTRO_HOLD)
     },
     // stay on this page: glide back to the current area
     cancelOutro() {
       window.clearTimeout(this.outroTimer)
       this.outroTimer = undefined
-      this.leaving = false
+      this.leaving = undefined
     },
-    goToNextPage() {
+    goToPage(direction: Slide) {
       window.clearTimeout(this.outroTimer)
       this.outroTimer = undefined
-      this.landAtEnd = false
-      this.slide = 'forward'
-      this.$emit('update:page', this.page + 1)
+      this.landAtEnd = direction === 'back'
+      this.slide = direction
+      this.$emit('update:page', direction === 'forward' ? this.page + 1 : this.page - 1)
     },
     keyPressed(e: KeyboardEvent) {
       if (e.ctrlKey || e.altKey || e.metaKey) return
@@ -325,31 +326,29 @@ export default Vue.extend({
     },
     next() {
       if (this.introActive) return this.finishIntro()
-      // already on the way out: skip the rest of the animation
-      if (this.leaving) return this.goToNextPage()
+      // already on the way out: forward again skips the rest of the animation, the other way cancels it
+      if (this.leaving) return this.leaving === 'forward' ? this.goToPage('forward') : this.cancelOutro()
       this.settle()
       if (this.resolvedStopIndex < this.stops.length - 1) {
         this.stopIndex = this.resolvedStopIndex + 1
         this.flashMinimap()
       } else if (this.page < this.pages.length) {
-        if (this.animations) this.startOutro()
-        else this.goToNextPage()
+        if (this.animations) this.startOutro('forward')
+        else this.goToPage('forward')
       } else {
         this.$emit('jump-next')
       }
     },
     prev() {
       if (this.introActive) return this.finishIntro()
-      // changed your mind while leaving: stay on this page
-      if (this.leaving) return this.cancelOutro()
+      if (this.leaving) return this.leaving === 'back' ? this.goToPage('back') : this.cancelOutro()
       this.settle()
       if (this.resolvedStopIndex > 0) {
         this.stopIndex = this.resolvedStopIndex - 1
         this.flashMinimap()
       } else if (this.page > 1) {
-        this.landAtEnd = true
-        this.slide = 'back'
-        this.$emit('update:page', this.page - 1)
+        if (this.animations) this.startOutro('back')
+        else this.goToPage('back')
       } else {
         this.$emit('jump-previous')
       }
@@ -466,17 +465,26 @@ export default Vue.extend({
   transition: transform 450ms cubic-bezier(0.45, 0, 0.2, 1);
 }
 
-/* page change we triggered: the old page is pushed out while the new one slides in */
-.pan-slide-from-right-enter-active, .pan-slide-from-right-leave-active,
-.pan-slide-from-left-enter-active, .pan-slide-from-left-leave-active {
-  transition: transform 600ms cubic-bezier(0.45, 0, 0.2, 1);
+/* page change we triggered: the new page slides in on top of the old one, which stays put
+   underneath until it is covered, then goes away */
+.pan-slide-from-right-enter-active, .pan-slide-from-left-enter-active {
+  transition: transform 1200ms cubic-bezier(0.22, 1, 0.36, 1);
+  z-index: 1;
 }
 
-.pan-slide-from-right-enter, .pan-slide-from-left-leave-to {
+.pan-slide-from-right-leave-active, .pan-slide-from-left-leave-active {
+  transition: opacity 1ms linear 1200ms;
+}
+
+.pan-slide-from-right-leave-to, .pan-slide-from-left-leave-to {
+  opacity: 0;
+}
+
+.pan-slide-from-right-enter {
   transform: translate3d(100%, 0, 0);
 }
 
-.pan-slide-from-left-enter, .pan-slide-from-right-leave-to {
+.pan-slide-from-left-enter {
   transform: translate3d(-100%, 0, 0);
 }
 
