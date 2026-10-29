@@ -30,7 +30,7 @@
 
     <!--  minimap: where the viewport is on the page  -->
     <transition name="pan-fade">
-      <div v-if="showMinimap && stops.length > 1"
+      <div v-if="showMinimap && stops.length > 1 && !introActive"
            class="pan-minimap"
            :style="minimapStyle"
       >
@@ -55,8 +55,17 @@ const MENU_ZONE_HEIGHT = 0.15
 const ZOOM_STEP = 0.25
 const MINIMAP_WIDTH = 96
 const MINIMAP_DURATION = 1500
+// when a page opens: show the whole page, then glide to the first area
+const INTRO_HOLD = 1500
+const INTRO_GLIDE = 2500
 // stopIndex value meaning "the last stop of the page", resolved once the page dimensions are known
 const LAST_STOP = -1
+
+enum IntroPhase {
+  NONE,
+  OVERVIEW,
+  GLIDE,
+}
 
 interface Size {
   w: number,
@@ -81,6 +90,8 @@ export default Vue.extend({
       suppressClickUntil: 0,
       showMinimap: false,
       minimapTimer: undefined as number | undefined,
+      introPhase: IntroPhase.OVERVIEW,
+      introTimer: undefined as number | undefined,
     }
   },
   props: {
@@ -109,8 +120,11 @@ export default Vue.extend({
     page(val, old) {
       this.$debug('[watch:page]', `old:${old}`, `new:${val}`)
       this.stopIndex = this.landAtEnd ? LAST_STOP : 0
-      this.landAtEnd = false
       this.free = undefined
+      this.finishIntro()
+      // going back lands on the last area directly, no intro
+      if (!this.landAtEnd) this.introPhase = IntroPhase.OVERVIEW
+      this.landAtEnd = false
     },
     zoom(val) {
       // zoom changed from outside (settings)
@@ -139,6 +153,7 @@ export default Vue.extend({
     window.removeEventListener('resize', this.onResize)
     window.clearTimeout(this.wheelTimer)
     window.clearTimeout(this.minimapTimer)
+    window.clearTimeout(this.introTimer)
   },
   computed: {
     shortcuts(): any {
@@ -169,13 +184,30 @@ export default Vue.extend({
     offset(): PanStop {
       return this.free || this.stops[this.resolvedStopIndex] || {x: 0, y: 0}
     },
+    introActive(): boolean {
+      return this.introPhase !== IntroPhase.NONE && this.stops.length > 1
+    },
     imageStyle(): object {
       if (!this.size) return {opacity: 0}
+      // the image is always laid out at the zoomed size, and only moved/scaled with a transform,
+      // so that the whole intro animation runs on the compositor
+      let x = -this.offset.x
+      let y = -this.offset.y
+      let scale = 1
+      let transition = this.free || !this.animations ? 'none' : undefined
+      if (this.introActive && this.introPhase === IntroPhase.OVERVIEW) {
+        scale = 1 / this.localZoom
+        x = (this.viewport.w - this.size.w * scale) / 2
+        y = (this.viewport.h - this.size.h * scale) / 2
+        transition = 'none'
+      } else if (this.introActive && this.introPhase === IntroPhase.GLIDE) {
+        transition = this.animations ? `transform ${INTRO_GLIDE}ms cubic-bezier(0.65, 0, 0.35, 1)` : 'none'
+      }
       return {
         width: `${this.size.w}px`,
         height: `${this.size.h}px`,
-        transform: `translate3d(${-this.offset.x}px, ${-this.offset.y}px, 0)`,
-        transition: this.free || !this.animations ? 'none' : undefined,
+        transform: `translate3d(${x}px, ${y}px, 0) scale(${scale})`,
+        transition,
       }
     },
     minimapStyle(): object {
@@ -208,8 +240,20 @@ export default Vue.extend({
     onLoad(e: Event, page: PageDtoWithUrl) {
       const img = e.target as HTMLImageElement
       const current = this.naturalSizes[page.number]
-      if (!current || current.w !== img.naturalWidth || current.h !== img.naturalHeight)
+      if (img.naturalWidth && img.naturalHeight && (!current || current.w !== img.naturalWidth || current.h !== img.naturalHeight))
         this.$set(this.naturalSizes, page.number, {w: img.naturalWidth, h: img.naturalHeight})
+      // start the intro once the page is actually visible
+      if (page.number === this.page && this.introPhase === IntroPhase.OVERVIEW && !this.introTimer) {
+        this.introTimer = window.setTimeout(() => {
+          this.introPhase = IntroPhase.GLIDE
+          this.introTimer = window.setTimeout(this.finishIntro, INTRO_GLIDE)
+        }, INTRO_HOLD)
+      }
+    },
+    finishIntro() {
+      window.clearTimeout(this.introTimer)
+      this.introTimer = undefined
+      this.introPhase = IntroPhase.NONE
     },
     keyPressed(e: KeyboardEvent) {
       if (e.ctrlKey || e.altKey || e.metaKey) return
@@ -227,10 +271,15 @@ export default Vue.extend({
         this.$emit('menu')
         return
       }
+      if (this.introActive) {
+        this.finishIntro()
+        return
+      }
       const back = this.rtl ? fx > 1 - BACK_ZONE : fx < BACK_ZONE
       back ? this.prev() : this.next()
     },
     next() {
+      if (this.introActive) return this.finishIntro()
       this.settle()
       if (this.resolvedStopIndex < this.stops.length - 1) {
         this.stopIndex = this.resolvedStopIndex + 1
@@ -243,6 +292,7 @@ export default Vue.extend({
       }
     },
     prev() {
+      if (this.introActive) return this.finishIntro()
       this.settle()
       if (this.resolvedStopIndex > 0) {
         this.stopIndex = this.resolvedStopIndex - 1
@@ -264,6 +314,7 @@ export default Vue.extend({
     },
     // change zoom, keeping the image point under (ax, ay) in place, then snap to the nearest stop
     applyZoom(zoom: number, ax: number = this.viewport.w / 2, ay: number = this.viewport.h / 2, snap: boolean = true) {
+      this.finishIntro()
       zoom = Math.round(clampZoom(zoom) * 100) / 100
       const before = this.size
       const offset = this.offset
@@ -296,6 +347,7 @@ export default Vue.extend({
     },
     onTouchStart(e: TouchEvent) {
       if (e.touches.length !== 2) return
+      this.finishIntro()
       const [a, b] = [e.touches[0], e.touches[1]]
       this.pinch = {
         distance: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY),
@@ -350,7 +402,7 @@ export default Vue.extend({
   top: 0;
   left: 0;
   max-width: none;
-  will-change: transform;
+  transform-origin: 0 0;
   transition: transform 450ms cubic-bezier(0.45, 0, 0.2, 1);
 }
 
