@@ -135,6 +135,18 @@
         @jump-next="jumpToNext()"
       ></continuous-reader>
 
+      <pan-reader
+        v-else-if="panMode"
+        :pages="pages"
+        :page.sync="page"
+        :zoom.sync="panZoom"
+        :reading-direction="readingDirection"
+        :animations="animations"
+        @menu="toggleToolbars()"
+        @jump-previous="jumpToPrevious()"
+        @jump-next="jumpToNext()"
+      ></pan-reader>
+
       <paged-reader
         v-else
         :pages="pages"
@@ -234,6 +246,30 @@
             <template v-if="!continuousReader">
               <v-subheader class="font-weight-black text-h6">{{ $t('bookreader.settings.paged') }}</v-subheader>
               <v-list-item>
+                <settings-switch v-model="panMode" :label="$t('bookreader.settings.pan_mode')"/>
+              </v-list-item>
+
+              <v-list-item v-if="panMode">
+                <v-row justify-md="center" justify-sm="start">
+                  <v-col cols="5" class="text-left" align-self="center">
+                    <span>{{ $t('bookreader.settings.pan_zoom') }}</span>
+                  </v-col>
+                  <v-col cols="7">
+                    <v-slider
+                      v-model="panZoom"
+                      :min="panZoomMin"
+                      :max="panZoomMax"
+                      step="0.25"
+                      thumb-label
+                      hide-details
+                    >
+                      <template v-slot:thumb-label="{ value }">{{ value }}×</template>
+                    </v-slider>
+                  </v-col>
+                </v-row>
+              </v-list-item>
+
+              <v-list-item v-if="!panMode">
                 <settings-select
                   :items="scaleTypes"
                   v-model="scale"
@@ -241,7 +277,7 @@
                 />
               </v-list-item>
 
-              <v-list-item>
+              <v-list-item v-if="!panMode">
                 <settings-select
                   :items="pageLayouts"
                   v-model="pageLayout"
@@ -331,6 +367,9 @@ import Vue from 'vue'
 import {Location} from 'vue-router'
 import PagedReader from '@/components/readers/PagedReader.vue'
 import ContinuousReader from '@/components/readers/ContinuousReader.vue'
+import PanReader from '@/components/readers/PanReader.vue'
+import {PAN_ZOOM_MAX, PAN_ZOOM_MIN} from '@/functions/pan-reader'
+import {shortcutsPanLTR, shortcutsPanRTL, shortcutsSettingsPan} from '@/functions/shortcuts/pan-reader'
 import {ContinuousScaleType, MarginValues, PaddingPercentage, PagedReaderLayout, ScaleType} from '@/types/enum-reader'
 import {
   shortcutsLTR,
@@ -354,6 +393,7 @@ export default Vue.extend({
   components: {
     ContinuousReader,
     PagedReader,
+    PanReader,
     SettingsSwitch,
     SettingsSelect,
     ThumbnailExplorerDialog,
@@ -393,6 +433,8 @@ export default Vue.extend({
         alwaysFullscreen: false,
         animations: true,
         scale: ScaleType.SCREEN,
+        panMode: false,
+        panZoom: 2,
         continuousScale: ContinuousScaleType.WIDTH,
         sidePadding: 0,
         pageMargin: 0,
@@ -400,6 +442,8 @@ export default Vue.extend({
         backgroundColor: 'black',
       },
       shortcuts: {} as any,
+      panZoomMin: PAN_ZOOM_MIN,
+      panZoomMax: PAN_ZOOM_MAX,
       notification: {
         enabled: false,
         message: '',
@@ -447,7 +491,7 @@ export default Vue.extend({
     checkImageSupport(ImageFeature.AVIF, (isSupported) => {
       if (isSupported) this.supportedMediaTypes.push('image/avif')
     })
-    this.shortcuts = this.$_.keyBy([...shortcutsSettings, ...shortcutsSettingsPaged, ...shortcutsSettingsContinuous, ...shortcutsMenus, ...shortcutsAll], x => x.key)
+    this.shortcuts = this.$_.keyBy([...shortcutsSettings, ...shortcutsSettingsPaged, ...shortcutsSettingsPan, ...shortcutsSettingsContinuous, ...shortcutsMenus, ...shortcutsAll], x => x.key)
     window.addEventListener('keydown', this.keyPressed)
     if (screenfull.isEnabled) screenfull.on('change', this.fullscreenChanged)
   },
@@ -462,6 +506,8 @@ export default Vue.extend({
     this.swipe = this.$store.state.persistedState.webreader.swipe
     this.alwaysFullscreen = this.$store.state.persistedState.webreader.alwaysFullscreen
     this.scale = this.$store.state.persistedState.webreader.paged.scale
+    this.panMode = this.$store.state.persistedState.webreader.paged.panMode
+    this.panZoom = this.$store.state.persistedState.webreader.paged.panZoom
     this.continuousScale = this.$store.state.persistedState.webreader.continuous.scale
     this.sidePadding = this.$store.state.persistedState.webreader.continuous.padding
     this.pageMargin = this.$store.state.persistedState.webreader.continuous.margin
@@ -511,6 +557,9 @@ export default Vue.extend({
     continuousReader(): boolean {
       return this.readingDirection === ReadingDirection.WEBTOON
     },
+    panReader(): boolean {
+      return this.panMode && !this.continuousReader
+    },
     progress(): number {
       return this.page / this.pagesCount * 100
     },
@@ -525,7 +574,9 @@ export default Vue.extend({
     },
     shortcutsHelp(): object {
       let nav = []
-      switch (this.readingDirection) {
+      if (this.panReader) {
+        nav.push(...(this.readingDirection === ReadingDirection.RIGHT_TO_LEFT ? shortcutsPanRTL : shortcutsPanLTR), ...shortcutsAll)
+      } else switch (this.readingDirection) {
         case ReadingDirection.LEFT_TO_RIGHT:
           nav.push(...shortcutsLTR, ...shortcutsAll)
           break
@@ -542,7 +593,7 @@ export default Vue.extend({
       if (this.continuousReader) {
         settings.push(...shortcutsSettingsContinuous)
       } else {
-        settings.push(...shortcutsSettingsPaged)
+        settings.push(...shortcutsSettingsPaged, ...shortcutsSettingsPan)
       }
       return {
         [this.$t('bookreader.shortcuts.reader_navigation').toString()]: nav,
@@ -640,6 +691,26 @@ export default Vue.extend({
         if (Object.values(PagedReaderLayout).includes(pageLayout)) {
           this.settings.pageLayout = pageLayout
           this.$store.commit('setWebreaderPagedPageLayout', pageLayout)
+        }
+      },
+    },
+    panMode: {
+      get: function (): boolean {
+        return this.settings.panMode
+      },
+      set: function (panMode: boolean): void {
+        this.settings.panMode = panMode
+        this.$store.commit('setWebreaderPagedPanMode', panMode)
+      },
+    },
+    panZoom: {
+      get: function (): number {
+        return this.settings.panZoom
+      },
+      set: function (panZoom: number): void {
+        if (typeof panZoom === 'number' && panZoom >= PAN_ZOOM_MIN && panZoom <= PAN_ZOOM_MAX) {
+          this.settings.panZoom = panZoom
+          this.$store.commit('setWebreaderPagedPanZoom', panZoom)
         }
       },
     },
@@ -862,6 +933,11 @@ export default Vue.extend({
       this.pageLayout = enumValues[i]
       const text = this.$i18n.t(this.pageLayout)
       this.sendNotification(`${this.$t('bookreader.cycling_page_layout')}: ${text}`)
+    },
+    togglePanMode() {
+      if (this.continuousReader) return
+      this.panMode = !this.panMode
+      this.sendNotification(this.$t(this.panMode ? 'bookreader.pan_mode_enabled' : 'bookreader.pan_mode_disabled').toString())
     },
     toggleToolbars() {
       this.showToolbars = !this.showToolbars
