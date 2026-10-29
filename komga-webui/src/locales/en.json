@@ -112,6 +112,8 @@
       "double_no_cover": "Double pages (no cover)",
       "single": "Single page"
     },
+    "pan_mode_disabled": "Pan mode disabled",
+    "pan_mode_enabled": "Pan mode enabled",
     "reader_settings": "Reader Settings",
     "scale_type": {
       "continuous_original": "Original",
@@ -140,6 +142,8 @@
       "page_layout": "Page layout",
       "page_margin": "Page margin",
       "paged": "Paginated Reader Options",
+      "pan_mode": "Pan mode",
+      "pan_zoom": "Pan zoom",
       "reading_mode": "Reading mode",
       "scale_type": "Scale type",
       "side_padding": "Side padding",
@@ -157,7 +161,9 @@
       "last_page": "Last page",
       "left_to_right": "Left to Right",
       "menus": "Menus",
+      "next_area": "Next area",
       "next_page": "Next page",
+      "previous_area": "Previous area",
       "previous_page": "Previous page",
       "reader_navigation": "Reader Navigation",
       "right_to_left": "Right to Left",
@@ -166,8 +172,11 @@
       "show_hide_settings": "Show/hide settings menu",
       "show_hide_thumbnails": "Show/hide thumbnails explorer",
       "show_hide_toolbars": "Show/hide toolbars",
+      "toggle_pan_mode": "Toggle pan mode",
       "vertical": "Vertical",
-      "webtoon": "Webtoon"
+      "webtoon": "Webtoon",
+      "zoom_in": "Zoom in",
+      "zoom_out": "Zoom out"
     },
     "tooltip_incognito": "Read progress will not be saved"
   },
